@@ -23,3 +23,16 @@ index/
 # OS
 .DS_Store
 Thumbs.db
+
+# Generated datasets
+data/
+
+# Generated embeddings
+embeddings/*.npy
+
+# Python cache
+__pycache__/
+*.pyc
+
+# Virtual environment
+venv/
