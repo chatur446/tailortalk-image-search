@@ -1,88 +1,221 @@
 import faiss
 import numpy as np
 import pandas as pd
+import torch
 
+from PIL import Image
+from transformers import CLIPModel, CLIPProcessor
+
+from reranker import (
+    metadata_similarity,
+    calculate_final_score
+)
+
+
+MODEL_NAME = "openai/clip-vit-base-patch32"
 
 INDEX_PATH = "index/image_index.faiss"
-EMBEDDINGS_PATH = "embeddings/image_embeddings.npy"
-METADATA_PATH = "data/metadata.csv"
+METADATA_PATH = "data/structured_metadata.csv"
+
+TOP_K_VISUAL = 20
+TOP_K_FINAL = 5
+
+
+def load_model():
+
+    print("Loading CLIP model...")
+
+    processor = CLIPProcessor.from_pretrained(
+        MODEL_NAME
+    )
+
+    model = CLIPModel.from_pretrained(
+        MODEL_NAME
+    )
+
+    model.eval()
+
+    return processor, model
+
+
+def generate_embedding(
+    image_path,
+    processor,
+    model
+):
+
+    image = Image.open(image_path).convert("RGB")
+
+    inputs = processor(
+        images=image,
+        return_tensors="pt"
+    )
+
+    with torch.no_grad():
+
+        outputs = model.get_image_features(
+            **inputs
+        )
+
+    # Handle different transformers versions
+    if hasattr(outputs, "pooler_output"):
+        embedding = outputs.pooler_output
+    elif hasattr(outputs, "image_embeds"):
+        embedding = outputs.image_embeds
+    else:
+        embedding = outputs
+
+    embedding = embedding.detach().cpu().numpy()
+
+    embedding = embedding / np.linalg.norm(
+        embedding,
+        axis=1,
+        keepdims=True
+    )
+
+    return embedding.astype("float32")
 
 
 def main():
 
     print("Loading index...")
 
-    index = faiss.read_index(INDEX_PATH)
+    index = faiss.read_index(
+        INDEX_PATH
+    )
 
     print("Loading metadata...")
 
-    metadata = pd.read_csv(METADATA_PATH)
+    metadata = pd.read_csv(
+        METADATA_PATH
+    )
 
-    print("Loading embeddings...")
+    print("Loading model...")
 
-    embeddings = np.load(
-        EMBEDDINGS_PATH
-    ).astype("float32")
+    processor, model = load_model()
 
-    query_indices = [0, 10, 100, 500, 1000]
+    query_image_id = "001006_AA311090"
 
-    for query_index in query_indices:
+    query_row = metadata[
+        metadata["image_id"] == query_image_id
+    ].iloc[0]
 
-        query_embedding = embeddings[
-            query_index
-        ].reshape(1, -1)
+    print("\n==============================")
+    print("QUERY")
+    print("==============================")
 
-        scores, indices = index.search(
-            query_embedding,
-            6
-        )
+    print(
+        "Image:",
+        query_row["image_id"]
+    )
 
-        print("\n==============================")
-        print("QUERY")
-        print("==============================")
+    print(
+        "SKU:",
+        query_row["SKU"]
+    )
 
-        print(
-            "Image:",
-            metadata.iloc[query_index]["image_id"]
-        )
+    print(
+        "Name:",
+        query_row["Name"]
+    )
 
-        print(
-            "SKU:",
-            metadata.iloc[query_index]["SKU"]
-        )
+    print("\nGenerating query embedding...")
 
-        print(
-            "Name:",
-            metadata.iloc[query_index]["Name"]
-        )
+    query_embedding = generate_embedding(
+        query_row["image_path"],
+        processor,
+        model
+    )
 
-        print("\nTop 5 similar products:\n")
+    # ------------------------------------------------
+    # STEP 1: Visual search
+    # ------------------------------------------------
 
-        result_count = 0
+    print("\nSearching FAISS...")
 
-        for score, idx in zip(
-            scores[0],
+    visual_scores, indices = index.search(
+        query_embedding,
+        TOP_K_VISUAL
+    )
+
+    candidates = []
+
+    # ------------------------------------------------
+    # STEP 2: Metadata reranking
+    # ------------------------------------------------
+
+    for rank, (score, idx) in enumerate(
+        zip(
+            visual_scores[0],
             indices[0]
-        ):
+        )
+    ):
 
-            # Skip the query image itself
-            if idx == query_index:
-                continue
+        candidate = metadata.iloc[idx]
 
-            result_count += 1
+        # Don't return the query itself
+        if candidate["image_id"] == query_image_id:
+            continue
 
-            row = metadata.iloc[idx]
+        metadata_score = metadata_similarity(
+            query_row,
+            candidate
+        )
 
-            print(
-                f"{result_count}. "
-                f"Score={score:.4f} | "
-                f"SKU={row['SKU']} | "
-                f"Name={row['Name']} | "
-                f"Image={row['image_path']}"
-            )
+        final_score = calculate_final_score(
+            float(score),
+            metadata_score
+        )
 
-            if result_count == 5:
-                break
+        candidates.append({
+            "visual_score": float(score),
+            "metadata_score": metadata_score,
+            "final_score": final_score,
+            "candidate": candidate
+        })
+
+    # ------------------------------------------------
+    # STEP 3: Sort by final score
+    # ------------------------------------------------
+
+    candidates.sort(
+        key=lambda x: x["final_score"],
+        reverse=True
+    )
+
+    print("\n==============================")
+    print("VISUAL + METADATA SEARCH")
+    print("==============================")
+
+    print("\nTop 5 results:\n")
+
+    for rank, result in enumerate(
+        candidates[:TOP_K_FINAL],
+        1
+    ):
+
+        candidate = result["candidate"]
+
+        print(
+            f"{rank}. "
+            f"Final={result['final_score']:.4f} | "
+            f"Visual={result['visual_score']:.4f} | "
+            f"Metadata={result['metadata_score']:.4f}"
+        )
+
+        print(
+            f"   SKU: {candidate['SKU']}"
+        )
+
+        print(
+            f"   Name: {candidate['Name']}"
+        )
+
+        print(
+            f"   Image: {candidate['image_path']}"
+        )
+
+        print()
 
 
 if __name__ == "__main__":
