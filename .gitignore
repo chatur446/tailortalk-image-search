@@ -1,21 +1,21 @@
-# Virtual environment
-venv/
-
-# Python cache
+# Python
 __pycache__/
 *.pyc
-
-# Environment variables
+venv/
 .env
 
-# Downloaded dataset images
+# Provided dataset
+byrappa_tejas_31july.csv
+
+# Downloaded images
 data/images/
 
-# Generated vector index
-index/
+# Generated dataset files
+data/metadata.csv
+data/download_failures.csv
 
-# Generated sample files
-data/sample_images.jpg
+# Generated indexes
+index/
 
 # IDE
 .vscode/
