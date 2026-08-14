@@ -1,0 +1,25 @@
+# Virtual environment
+venv/
+
+# Python cache
+__pycache__/
+*.pyc
+
+# Environment variables
+.env
+
+# Downloaded dataset images
+data/images/
+
+# Generated vector index
+index/
+
+# Generated sample files
+data/sample_images.jpg
+
+# IDE
+.vscode/
+
+# OS
+.DS_Store
+Thumbs.db
