@@ -3,7 +3,7 @@ import pandas as pd
 
 def split_values(value):
     """
-    Convert pipe-separated metadata into a set.
+    Convert pipe-separated metadata into a normalized set.
     """
 
     if pd.isna(value) or not str(value).strip():
@@ -18,9 +18,10 @@ def split_values(value):
 
 def calculate_overlap(query_values, candidate_values):
     """
-    Calculate how much metadata overlaps.
+    Calculate query-oriented metadata overlap.
 
-    Returns a score between 0 and 1.
+    Returns:
+        0.0 to 1.0
     """
 
     if not query_values or not candidate_values:
@@ -31,15 +32,16 @@ def calculate_overlap(query_values, candidate_values):
     if not intersection:
         return 0.0
 
-    # Jaccard-style similarity
-    union = query_values.union(candidate_values)
-
-    return len(intersection) / len(union)
+    return len(intersection) / len(query_values)
 
 
 def metadata_similarity(query_row, candidate_row):
     """
     Calculate metadata similarity between two products.
+
+    Fabric, colour and design have different importance.
+    Missing metadata does not count as a match, but it also
+    does not receive the full penalty of an explicit mismatch.
     """
 
     query_fabrics = split_values(query_row["fabrics"])
@@ -51,29 +53,60 @@ def metadata_similarity(query_row, candidate_row):
     query_designs = split_values(query_row["designs"])
     candidate_designs = split_values(candidate_row["designs"])
 
-    fabric_score = calculate_overlap(
-        query_fabrics,
-        candidate_fabrics
+    # Calculate overlaps only when query metadata exists.
+    fabric_score = (
+        calculate_overlap(query_fabrics, candidate_fabrics)
+        if query_fabrics and candidate_fabrics
+        else None
     )
 
-    colour_score = calculate_overlap(
-        query_colours,
-        candidate_colours
+    colour_score = (
+        calculate_overlap(query_colours, candidate_colours)
+        if query_colours and candidate_colours
+        else None
     )
 
-    design_score = calculate_overlap(
-        query_designs,
-        candidate_designs
+    design_score = (
+        calculate_overlap(query_designs, candidate_designs)
+        if query_designs and candidate_designs
+        else None
     )
 
-    # Weighted metadata score
-    score = (
-        0.45 * fabric_score +
-        0.35 * colour_score +
-        0.20 * design_score
-    )
+    # Original importance of each attribute
+    weights = {
+        "fabric": 0.40,
+        "colour": 0.40,
+        "design": 0.20
+    }
 
-    return score
+    scores = {
+        "fabric": fabric_score,
+        "colour": colour_score,
+        "design": design_score
+    }
+
+    weighted_score = 0.0
+    available_weight = 0.0
+
+    for attribute in scores:
+
+        score = scores[attribute]
+        weight = weights[attribute]
+
+        if score is not None:
+            weighted_score += score * weight
+            available_weight += weight
+
+        else:
+            # Missing metadata gets partial credit for neutrality,
+            # rather than being treated as either a match or mismatch.
+            weighted_score += 0.25 * weight
+            available_weight += weight
+
+    if available_weight == 0:
+        return 0.0
+
+    return weighted_score / available_weight
 
 
 def calculate_final_score(
@@ -87,6 +120,6 @@ def calculate_final_score(
     """
 
     return (
-        0.75 * visual_score +
-        0.25 * metadata_score
+        0.85 * visual_score +
+        0.15 * metadata_score
     )
